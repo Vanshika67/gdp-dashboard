@@ -7,7 +7,7 @@ st.set_page_config(page_title="World GDP Dashboard", page_icon="🌍", layout="w
 st.title("🌍 World GDP Dashboard")
 st.caption("Explore GDP data by country, indicator, and year.")
 
-DATA_FILE = Path("/content/world_gdp_data.csv")
+DATA_FILE = Path(__file__).parent / "world_gdp_data.csv"
 
 @st.cache_data
 def get_gdp_data(file_path):
