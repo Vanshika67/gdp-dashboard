@@ -1,151 +1,131 @@
-import streamlit as st
 import pandas as pd
-import math
+import streamlit as st
+import plotly.express as px
 from pathlib import Path
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.set_page_config(page_title="World GDP Dashboard", page_icon="🌍", layout="wide")
+st.title("🌍 World GDP Dashboard")
+st.caption("Explore GDP data by country, indicator, and year.")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+DATA_FILE = Path("/content/world_gdp_data.csv")
 
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def get_gdp_data(file_path):
+    df = pd.read_csv(file_path, encoding="latin1")
+    df.columns = df.columns.astype(str).str.strip().str.lower()
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    required = ["country_name", "indicator_name"]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}. Found: {df.columns.tolist()}")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    year_columns = [c for c in df.columns if c.isdigit() and 1980 <= int(c) <= 2024]
+    if not year_columns:
+        raise ValueError("No year columns from 1980 to 2024 were found.")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+    result = df.melt(
+        id_vars=["country_name", "indicator_name"],
+        value_vars=year_columns,
+        var_name="Year",
+        value_name="GDP"
     )
+    result["country_name"] = result["country_name"].astype(str).str.strip()
+    result["indicator_name"] = result["indicator_name"].astype(str).str.strip()
+    result["Year"] = pd.to_numeric(result["Year"], errors="coerce")
+    result["GDP"] = pd.to_numeric(result["GDP"], errors="coerce")
+    result = result.dropna(subset=["Year", "GDP"])
+    result = result[result["country_name"] != ""]
+    result["Year"] = result["Year"].astype(int)
+    return result
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+if not DATA_FILE.exists():
+    st.error(f"CSV file not found: {DATA_FILE}. Upload world_gdp_data.csv to /content.")
+    st.stop()
 
-    return gdp_df
+try:
+    gdp_df = get_gdp_data(str(DATA_FILE))
+except Exception as error:
+    st.error(f"Unable to load GDP data: {error}")
+    st.stop()
 
-gdp_df = get_gdp_data()
+if gdp_df.empty:
+    st.warning("No numeric GDP values were found in the CSV.")
+    st.stop()
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+st.sidebar.header("🔎 Dashboard Filters")
+indicators = sorted(gdp_df["indicator_name"].dropna().unique().tolist())
+selected_indicator = st.sidebar.selectbox("Select indicator", indicators)
+indicator_df = gdp_df[gdp_df["indicator_name"] == selected_indicator]
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+countries = sorted(indicator_df["country_name"].dropna().unique().tolist())
+selected_countries = st.sidebar.multiselect(
+    "Select countries",
+    options=countries,
+    default=countries[:min(5, len(countries))]
 )
 
-''
-''
+min_year, max_year = int(indicator_df["Year"].min()), int(indicator_df["Year"].max())
+if min_year == max_year:
+    year_range = (min_year, max_year)
+    st.sidebar.write(f"Year: {min_year}")
+else:
+    year_range = st.sidebar.slider(
+        "Select year range", min_value=min_year, max_value=max_year,
+        value=(min_year, max_year), step=1
+    )
 
+filtered = indicator_df[indicator_df["Year"].between(year_range[0], year_range[1])]
+filtered = filtered[filtered["country_name"].isin(selected_countries)] if selected_countries else filtered.iloc[0:0]
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+latest_year = year_range[1]
+latest = filtered[filtered["Year"] == latest_year]
+c1, c2, c3 = st.columns(3)
+c1.metric("Countries selected", f'{filtered["country_name"].nunique():,}')
+c2.metric(f"Total value in {latest_year}", f'{latest["GDP"].sum():,.2f}' if not latest.empty else "N/A")
+c3.metric(f"Average value in {latest_year}", f'{latest["GDP"].mean():,.2f}' if not latest.empty else "N/A")
 
-st.header(f'GDP in {to_year}', divider='gray')
+st.divider()
+st.subheader("📈 GDP Trend Over Time")
+if filtered.empty:
+    st.info("Select at least one country from the sidebar to view charts.")
+else:
+    trend = px.line(
+        filtered.sort_values("Year"), x="Year", y="GDP", color="country_name",
+        markers=True, title="GDP values by country and year",
+        labels={"GDP": "GDP value", "country_name": "Country"}
+    )
+    st.plotly_chart(trend, use_container_width=True)
 
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
+    left, right = st.columns(2)
+    with left:
+        st.subheader(f"🏆 Top Countries in {latest_year}")
+        if not latest.empty:
+            ranking = latest.groupby("country_name", as_index=False)["GDP"].sum()
+            ranking = ranking.sort_values("GDP", ascending=False).head(10).sort_values("GDP")
+            bar = px.bar(ranking, x="GDP", y="country_name", orientation="h",
+                         labels={"GDP": "GDP value", "country_name": "Country"})
+            st.plotly_chart(bar, use_container_width=True)
         else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+            st.info("No values available for the selected year.")
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+    with right:
+        st.subheader("🥧 GDP Distribution")
+        if not latest.empty:
+            pie_data = latest.groupby("country_name", as_index=False)["GDP"].sum()
+            pie_data = pie_data.sort_values("GDP", ascending=False).head(8)
+            if (pie_data["GDP"] >= 0).all() and pie_data["GDP"].sum() > 0:
+                pie = px.pie(pie_data, names="country_name", values="GDP",
+                             title=f"Share among top 8 selected countries ({latest_year})")
+                st.plotly_chart(pie, use_container_width=True)
+            else:
+                st.info("Pie chart needs positive GDP values.")
+
+st.subheader("📋 GDP Data Table")
+st.dataframe(filtered.sort_values(["Year", "country_name"]), use_container_width=True, hide_index=True)
+st.download_button(
+    "⬇️ Download filtered data (CSV)",
+    data=filtered.to_csv(index=False).encode("utf-8"),
+    file_name="filtered_gdp_data.csv",
+    mime="text/csv"
+)
+st.caption("Charts display the numeric values supplied in your CSV. Verify indicator definitions and units before interpreting totals.")
